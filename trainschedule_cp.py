@@ -20,31 +20,29 @@ def solve_displib_problem(problem_json):
         for j in i:
             LARGE_INTEGER += j["min_duration"]
         temp.append(LARGE_INTEGER)
-    LARGE_INTEGER = sum(temp)
+    LARGE_INTEGER = 2*sum(temp)
     #print(temp,n,LARGE_INTEGER)
     #return
 
     # 1. Create Variables
     for train_index, train_operations in enumerate(trains):
         train_vars[train_index] = {}
-        min_duration_train = 0
+        #min_duration_p = 0
+        #start_lb_p = 0
         for op_index, op_data in enumerate(train_operations):
             #print(min_duration_train)
             min_duration = op_data.get("min_duration", 0)
-            start_lb = op_data.get("start_lb", -1)
-            if start_lb < 0:
-                start_lb = min_duration_train
-            start_ub = op_data.get("start_ub", -1)
-            if start_ub < 0:
-                start_ub = LARGE_INTEGER
+            #start_lb = max(op_data.get("start_lb", 0),start_lb_p + min_duration_p) #Successors only
+            start_lb = op_data.get("start_lb", 0)
+            start_ub = op_data.get("start_ub", LARGE_INTEGER)
             resources = op_data.get("resources", [])
 
             train_vars[train_index][op_index] = {}
             train_vars[train_index][op_index]["start_time"] = model.NewIntVar(start_lb, start_ub, f"train_{train_index}_op_{op_index}_start")
             train_vars[train_index][op_index]["active"] = model.NewBoolVar(f"active_{train_index}_{op_index}")
             train_vars[train_index][op_index]["end_time"] = model.NewIntVar(start_lb + min_duration, LARGE_INTEGER, f"train_{train_index}_op_{op_index}_end")
-
-            min_duration_train += min_duration
+            #start_lb_p = start_lb
+            #min_duration_p = min_duration
             
             for resource_data in resources:
                 resource = resource_data["resource"]
@@ -63,10 +61,12 @@ def solve_displib_problem(problem_json):
     # 2. Add Successor Constraints (within each train)
     def add_successor_constraints(train_operations, train_index):
         for op_index, op_data in enumerate(train_operations):
+
             successors = op_data.get("successors", [])
             min_duration = op_data.get("min_duration", 0)
 
             st_ij = train_vars[train_index][op_index]["start_time"]
+            active_ij = train_vars[train_index][op_index]["active"]
             et_ij = train_vars[train_index][op_index]["end_time"]
 
             model.Add(et_ij - st_ij >= min_duration) # Operation duration is always greater than min_duration
@@ -75,14 +75,14 @@ def solve_displib_problem(problem_json):
                 continue
 
             successor_vars = [train_vars[train_index][succ_op]["active"] for succ_op in successors]
-            model.Add(sum(successor_vars) == 1)  # Ensure only one successor is chosen
+            model.Add(sum(successor_vars) == 1).OnlyEnforceIf(active_ij)  # Ensure only one successor is chosen
 
             #successor starts after current operation ends
             for i, succ_op in enumerate(successors):
                 chosen = successor_vars[i]
                 succ_st = train_vars[train_index][succ_op]["start_time"]
 
-                model.Add( succ_st == et_ij).OnlyEnforceIf([chosen])
+                model.Add( succ_st == et_ij).OnlyEnforceIf([chosen,active_ij])
 
                 resources_needed_for_succ = train_operations[succ_op].get("resources", [])
 
@@ -94,7 +94,7 @@ def solve_displib_problem(problem_json):
                         c = 1
                         break
                 if(c == 0):
-                    model.Add(et_ij == st_ij + min_duration).OnlyEnforceIf([chosen])
+                    model.Add(et_ij==st_ij + min_duration).OnlyEnforceIf([chosen,active_ij])
 
 
     for train_index, train_operations in enumerate(trains):
